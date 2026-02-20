@@ -1,0 +1,82 @@
+openapi: 3.0.3
+info:
+  title: VisibilidadAIO Local SEO Audit API
+  description: API for analyzing a local business's visibility across Google Map Pack, Organic Search, and AI Overviews.
+  version: 1.0.0
+servers:
+  - url: https://v0-local-business-visibility-tool.vercel.app
+paths:
+  /api/analyze:
+    post:
+      summary: Generate a Local SEO Visibility Report
+      description: Runs 6 parallel SerpAPI queries to audit a business's local SEO presence, returning a comprehensive JSON report including before/after scores, competitor gap analysis, and recommended actions.
+      operationId: generateVisibilityReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - location
+                - category
+              properties:
+                name:
+                  type: string
+                  description: "The name of the business (e.g., 'ferrus')"
+                location:
+                  type: string
+                  description: "The city or geographic location (e.g., 'Madrid')"
+                category:
+                  type: string
+                  description: "The business category or primary keyword (e.g., 'dentista')"
+      responses:
+        '200':
+          description: A detailed JSON analysis report including internal diagnostics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  business:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      location: { type: string }
+                      category: { type: string }
+                  scores:
+                    type: object
+                    properties:
+                      mapPackScore: { type: integer, description: "0-100 score representing Map Pack performance" }
+                      aiOverviewScore: { type: integer, description: "0-100 score representing AI Overviews mentions" }
+                      beforeScore: { type: integer, description: "Traditional SEO score (Map Pack + Organic)" }
+                      afterScore: { type: integer, description: "Current SEO score (accounting for AI Overviews shift)" }
+                      visibilityLoss: { type: integer, description: "Percentage of visibility lost to AI" }
+                  internalReport:
+                    type: object
+                    properties:
+                      topCompetitors:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name: { type: string }
+                            count: { type: integer }
+                      insights:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            type: { type: string, enum: [warning, opportunity, critical, success] }
+                            metric: { type: string }
+                            message: { type: string }
+                  recommendations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title: { type: string }
+                        description: { type: string }
+                        impact: { type: string, enum: [high, medium, low] }
+                        category: { type: string }

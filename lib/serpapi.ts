@@ -10,7 +10,6 @@ function normalize(text: string) {
     .trim()
 }
 
-// Simple Levenshtein distance for fuzzy matching
 function levenshteinDistance(a: string, b: string): number {
   if (a.length === 0) return b.length
   if (b.length === 0) return a.length
@@ -39,10 +38,8 @@ function isMatch(businessName: string, textToCheck: string): boolean {
   const nBusiness = normalize(businessName)
   const nText = normalize(textToCheck)
 
-  // 1. Direct inclusion (best case)
   if (nText.includes(nBusiness) || nBusiness.includes(nText)) return true
 
-  // 2. Token overlap (e.g. "Clinica Dental Dentix" vs "Dentix Madrid")
   const businessTokens = nBusiness.split(" ").filter(t => t.length > 2)
   const textTokens = nText.split(" ").filter(t => t.length > 2)
 
@@ -53,7 +50,6 @@ function isMatch(businessName: string, textToCheck: string): boolean {
         matches++
       }
     }
-    // If at least 50% of the significant words match, consider it a hit
     if (matches / businessTokens.length >= 0.5) return true
   }
 
@@ -147,6 +143,7 @@ export async function runSerpQuery({
   queryText: string
   apiKey: string
 }): Promise<QueryResult> {
+  // Use tbm=lcl to explicitly request local search behavior from Google
   const params = new URLSearchParams({
     engine: "google",
     q: queryText,
@@ -156,13 +153,21 @@ export async function runSerpQuery({
     hl: "es",
     device: "mobile",
     num: "10",
+    // This format is highly specific for SerpAPI to trigger the localized SERP with a map pack
     location: business.location.toLowerCase().includes("spain") ? business.location : `${business.location}, Spain`,
   })
+
+  // If the query is direct or proximity, explicitly request a local/maps behavior 
+  // to maximize the chance Google returns the local_results array
+  if (queryType === "directa" || queryType === "proximidad") {
+    params.set("tbm", "lcl")
+  }
 
   const url = `https://serpapi.com/search.json?${params.toString()}`
 
   const res = await fetch(url, {
-    next: { revalidate: 60 * 60 },
+    // Shorter cache to avoid sticking to a bad 0-result SERP while testing
+    next: { revalidate: 60 * 5 },
   })
 
   if (!res.ok) {

@@ -4,25 +4,50 @@ export interface BusinessInput {
   category: string
 }
 
+export interface MapPackResult {
+  present: boolean
+  position: number | null
+  totalResults: number
+  competitors: string[]
+}
+
+export interface AiOverviewResult {
+  present: boolean
+  mentioned: boolean
+  mentionType: "direct" | "indirect" | "absent"
+  position: number | null
+}
+
 export interface QueryResult {
   query: string
   queryType: string
-  mapPack: {
-    present: boolean
-    position: number | null
-    totalResults: number
-    competitors: string[]
-  }
-  aiOverview: {
-    present: boolean
-    mentioned: boolean
-    mentionType: "direct" | "indirect" | "absent"
-    position: number | null
-  }
+  mapPack: MapPackResult
+  aiOverview: AiOverviewResult
   organicPosition: number | null
 }
 
-export interface VisibilityReport {
+export interface Recommendation {
+  title: string
+  description: string
+  impact: "high" | "medium" | "low"
+  category: string
+}
+
+export interface InternalInsight {
+  type: "warning" | "opportunity" | "critical" | "success"
+  message: string
+  metric: string
+}
+
+export interface InternalReport {
+  topCompetitors: { name: string; count: number }[]
+  lostVisibilityQueries: string[]
+  untappedAiQueries: string[]
+  organicButNoLocal: string[]
+  insights: InternalInsight[]
+}
+
+export interface AnalysisReport {
   business: BusinessInput
   timestamp: string
   queries: QueryResult[]
@@ -34,11 +59,5 @@ export interface VisibilityReport {
     visibilityLoss: number
   }
   recommendations: Recommendation[]
-}
-
-export interface Recommendation {
-  title: string
-  description: string
-  impact: "high" | "medium" | "low"
-  category: string
+  internalReport: InternalReport
 }

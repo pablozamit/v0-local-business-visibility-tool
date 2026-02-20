@@ -1,4 +1,4 @@
-import type { QueryResult, Recommendation } from "./types"
+import type { QueryResult, Recommendation, InternalReport, InternalInsight } from "./types"
 
 export const QUERY_TEMPLATES = [
   { type: "directa", template: (cat: string, loc: string) => `${cat} ${loc}` },
@@ -10,132 +10,237 @@ export const QUERY_TEMPLATES = [
 ]
 
 export function calculateScores(queries: QueryResult[]) {
-  let mapPackTotal = 0
-  let mapPackCount = 0
-  let aiTotal = 0
-  let aiCount = 0
+  // 1. Calculate BEFORE score (Map Pack + Organic)
+  // We evaluate each query individually to reward ANY presence, rather than punishing absences strictly.
+  let totalBeforePoints = 0
+  
+  // Calculate Map Pack performance separately to show in UI
+  let mapPackPoints = 0
+  let mapPackPossible = 0
 
   for (const q of queries) {
+    let queryPoints = 0
+    
+    // Map Pack is king for local (max 100 points per query)
     if (q.mapPack.present) {
-      mapPackCount++
+      mapPackPossible += 100
       if (q.mapPack.position !== null) {
-        mapPackTotal += q.mapPack.position === 1 ? 100 : q.mapPack.position === 2 ? 75 : 50
+        // 1st = 100, 2nd = 80, 3rd = 60
+        const mpScore = q.mapPack.position === 1 ? 100 : q.mapPack.position === 2 ? 80 : 60
+        queryPoints += mpScore
+        mapPackPoints += mpScore
       }
+    } else {
+      // If map pack doesn't trigger for this query, don't penalize as heavily
+      mapPackPossible += 50 
     }
-    if (q.aiOverview.present) {
-      aiCount++
-      if (q.aiOverview.mentioned) {
-        aiTotal += q.aiOverview.mentionType === "direct" ? 100 : 60
-      }
+
+    // Organic fallback (max 100 points)
+    let organicScore = 0
+    if (q.organicPosition !== null && q.organicPosition > 0) {
+      // Top 10 organic gets points. #1 = 100, #10 = 10.
+      organicScore = Math.max(0, 100 - (q.organicPosition - 1) * 10)
     }
+
+    // A query's total before score takes the BEST of Map Pack or Organic, 
+    // plus a small bonus if both are present.
+    if (queryPoints > 0 && organicScore > 0) {
+      queryPoints = Math.max(queryPoints, organicScore) + 10 // Synergy bonus
+    } else {
+      queryPoints = Math.max(queryPoints, organicScore)
+    }
+
+    totalBeforePoints += Math.min(100, queryPoints)
   }
 
-  const mapPackScore = mapPackCount > 0 ? Math.round(mapPackTotal / mapPackCount) : 0
-  const aiOverviewScore = aiCount > 0 ? Math.round(aiTotal / aiCount) : 0
+  // Average the points across all queries for the final "Before" score
+  const beforeScore = Math.round(totalBeforePoints / queries.length)
+  const mapPackScore = mapPackPossible > 0 ? Math.round((mapPackPoints / mapPackPossible) * 100) : 0
 
-  const beforeScore = Math.min(
-    100,
-    Math.round(
-      mapPackScore * 0.6 +
-        (queries.reduce((acc, q) => acc + (q.organicPosition ? Math.max(0, 100 - q.organicPosition * 5) : 0), 0) /
-          queries.length) *
-          0.4
+  // 2. Calculate AFTER score (Impact of AI Overviews)
+  // AI Overviews push everything down. If an AIO is present and you are NOT in it, you lose visibility.
+  let totalAfterPoints = 0
+  let aiPoints = 0
+  let aiPossible = 0
+
+  for (const q of queries) {
+    let currentQueryPoints = Math.min(100, 
+      Math.max(
+        q.mapPack.position ? (100 - (q.mapPack.position - 1) * 20) : 0,
+        q.organicPosition ? Math.max(0, 100 - (q.organicPosition - 1) * 10) : 0
+      )
     )
-  )
 
-  const aiPenalty =
-    queries.filter(q => q.aiOverview.present && !q.aiOverview.mentioned).length / Math.max(1, queries.length)
-  const afterScore = Math.max(0, Math.round(beforeScore * (1 - aiPenalty * 0.55)))
-  const visibilityLoss = beforeScore > 0 ? Math.round(((beforeScore - afterScore) / beforeScore) * 100) : 0
+    if (q.aiOverview.present) {
+      aiPossible += 100
+      if (q.aiOverview.mentioned) {
+        // You are in the AIO! This is a huge win. You keep your points and get a bonus.
+        const aScore = q.aiOverview.mentionType === "direct" ? 100 : 70
+        aiPoints += aScore
+        currentQueryPoints = Math.min(100, currentQueryPoints + 20) 
+      } else {
+        // AIO is present, but you are NOT in it.
+        // It pushes down organic and map pack results. Huge penalty to actual visibility.
+        // If you relied on organic, you lose ~60% of clicks. If Map Pack, ~40%.
+        const penaltyMultiplier = q.mapPack.position !== null ? 0.6 : 0.4
+        currentQueryPoints = currentQueryPoints * penaltyMultiplier
+      }
+    }
+
+    totalAfterPoints += currentQueryPoints
+  }
+
+  const aiOverviewScore = aiPossible > 0 ? Math.round((aiPoints / aiPossible) * 100) : 0
+  const afterScore = Math.round(totalAfterPoints / queries.length)
+  
+  // Real calculation of loss based on the shift
+  const visibilityLoss = beforeScore > afterScore 
+    ? Math.round(((beforeScore - afterScore) / beforeScore) * 100) 
+    : 0
 
   return { mapPackScore, aiOverviewScore, beforeScore, afterScore, visibilityLoss }
 }
 
+export function generateInternalReport(queries: QueryResult[], businessName: string): InternalReport {
+  const competitorCounts: Record<string, number> = {}
+  const lostVisibilityQueries: string[] = []
+  const untappedAiQueries: string[] = []
+  const organicButNoLocal: string[] = []
+  const insights: InternalInsight[] = []
+
+  let hasMapPackPresence = false
+  let organicRanks = 0
+
+  for (const q of queries) {
+    // 1. Competitor tracking
+    if (q.mapPack.present && q.mapPack.competitors) {
+      for (const comp of q.mapPack.competitors) {
+        competitorCounts[comp] = (competitorCounts[comp] || 0) + 1
+      }
+    }
+
+    // 2. Track specific query failures
+    if (q.mapPack.position !== null) hasMapPackPresence = true
+    if (q.organicPosition !== null && q.organicPosition <= 10) organicRanks++
+
+    // High organic, but missing from local map pack (Local SEO gap)
+    if (q.organicPosition !== null && q.organicPosition <= 10 && q.mapPack.present && q.mapPack.position === null) {
+      organicButNoLocal.push(q.query)
+    }
+
+    // AI Overview triggered, but client not mentioned (AI SEO gap)
+    if (q.aiOverview.present && !q.aiOverview.mentioned) {
+      untappedAiQueries.push(q.query)
+      
+      // If they used to rank page 1 or Map Pack but missed AI, it's a direct loss
+      if (q.mapPack.position !== null || (q.organicPosition !== null && q.organicPosition <= 5)) {
+        lostVisibilityQueries.push(q.query)
+      }
+    }
+  }
+
+  // Compile Top Competitors
+  const topCompetitors = Object.entries(competitorCounts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+
+  // Generate Insights
+  if (!hasMapPackPresence) {
+    insights.push({
+      type: "critical",
+      metric: "Google Business Profile",
+      message: "Cero presencia en el Local Pack (Top 3). Necesita optimización URGENTE de GBP y citaciones."
+    })
+  }
+
+  if (organicButNoLocal.length > 0) {
+    insights.push({
+      type: "opportunity",
+      metric: "Local SEO vs Organic",
+      message: `Buen SEO orgánico pero falla en local para: ${organicButNoLocal.slice(0, 2).join(", ")}. Fácil de arreglar vinculando la web al perfil de Google.`
+    })
+  }
+
+  if (untappedAiQueries.length > 0) {
+    insights.push({
+      type: "warning",
+      metric: "AI Overviews",
+      message: `Google está usando IA para ${untappedAiQueries.length} búsquedas donde el cliente no aparece. Los competidores están robando estos clics.`
+    })
+  }
+
+  if (topCompetitors.length > 0) {
+    insights.push({
+      type: "warning",
+      metric: "Competidores",
+      message: `"${topCompetitors[0].name}" domina el mapa (aparece en ${topCompetitors[0].count} búsquedas). Hay que auditar sus reseñas y categorías.`
+    })
+  }
+
+  return {
+    topCompetitors,
+    lostVisibilityQueries,
+    untappedAiQueries,
+    organicButNoLocal,
+    insights
+  }
+}
+
 export function generateRecommendations(
   scores: ReturnType<typeof calculateScores>,
-  queries: QueryResult[]
+  queries: QueryResult[],
+  internalReport: InternalReport
 ): Recommendation[] {
   const recs: Recommendation[] = []
 
-  if (scores.aiOverviewScore < 40) {
-    recs.push({
-      title: "Optimizar contenido para AI Overviews",
-      description:
-        "Crea contenido estructurado con preguntas y respuestas claras. Google AI prioriza fuentes que proporcionan respuestas directas y bien organizadas.",
-      impact: "high",
-      category: "Contenido",
-    })
-  }
-
+  // 1. GBP is always the highest ROI for local businesses if they are missing
   if (scores.mapPackScore < 50) {
     recs.push({
-      title: "Mejorar perfil de Google Business",
-      description:
-        "Completa al 100% tu perfil de Google Business Profile: fotos actualizadas, horarios exactos, descripcion detallada y categorias correctas.",
+      title: "Optimización radical del Google Business Profile",
+      description: "Tu perfil no está entrando en el Top 3. Necesitamos optimizar categorías primarias/secundarias, subir fotos geoetiquetadas y asegurar consistencia NAP (Name, Address, Phone).",
       impact: "high",
-      category: "Google Business",
+      category: "Local SEO",
     })
   }
 
-  recs.push({
-    title: "Implementar Schema Markup LocalBusiness",
-    description:
-      "Agrega datos estructurados Schema.org de tipo LocalBusiness en tu sitio web. Esto ayuda a Google a entender y mostrar tu negocio en resultados enriquecidos.",
-    impact: "high",
-    category: "SEO Tecnico",
-  })
+  // 2. AI Overviews
+  if (internalReport.untappedAiQueries.length > 0) {
+    recs.push({
+      title: "Estrategia de Contenido para AI Overviews",
+      description: "Google está mostrando respuestas generadas por IA para tus búsquedas clave, pero cita a otros. Necesitamos estructurar tu web con formato Q&A (Pregunta-Respuesta) directo.",
+      impact: "high",
+      category: "AI SEO",
+    })
+  }
 
+  // 3. Bridging Organic and Local
+  if (internalReport.organicButNoLocal.length > 0) {
+    recs.push({
+      title: "Sincronización Web-Mapa (Schema Markup)",
+      description: "Tu web posiciona bien, pero Google no la asocia fuertemente con tu local físico. Implementaremos código Schema LocalBusiness para forzar esa conexión.",
+      impact: "high",
+      category: "Technical SEO",
+    })
+  }
+
+  // 4. Reputation
   const hasLowReviews = queries.some(q => q.queryType === "opiniones" && !q.mapPack.position)
-  if (hasLowReviews) {
+  if (hasLowReviews || scores.mapPackScore < 80) {
     recs.push({
-      title: "Estrategia de resenas y reputacion",
-      description:
-        "Implementa un sistema para solicitar resenas a clientes satisfechos. Responde a todas las resenas, positivas y negativas, de forma profesional.",
-      impact: "high",
-      category: "Reputacion",
-    })
-  }
-
-  recs.push({
-    title: "Crear contenido E-E-A-T",
-    description:
-      "Desarrolla contenido que demuestre Experiencia, Conocimiento, Autoridad y Confianza. Los AI Overviews priorizan fuentes con alto E-E-A-T.",
-    impact: "medium",
-    category: "Contenido",
-  })
-
-  recs.push({
-    title: "Optimizar para busquedas conversacionales",
-    description:
-      "Adapta tu contenido a preguntas naturales que los usuarios hacen. Las AI Overviews se activan mas con consultas de tipo conversacional.",
-    impact: "medium",
-    category: "Contenido",
-  })
-
-  if (scores.visibilityLoss > 30) {
-    recs.push({
-      title: "Diversificar canales de adquisicion",
-      description:
-        "No dependas solo de Google Search. Desarrolla presencia en redes sociales, directorios locales, y plataformas especificas de tu industria.",
+      title: "Sistema Automatizado de Reseñas",
+      description: "La cantidad y frescura de las reseñas es el factor #1 para entrar al mapa. Instalaremos un embudo para captar reseñas de 5 estrellas de clientes recurrentes.",
       impact: "medium",
-      category: "Estrategia",
+      category: "Reputación",
     })
   }
 
+  // 5. General Authority
   recs.push({
-    title: "Monitorear cambios en SERPs",
-    description:
-      "Establece un sistema de monitoreo semanal para detectar cambios en como aparece tu negocio en los resultados de busqueda y AI Overviews.",
-    impact: "low",
-    category: "Monitoreo",
-  })
-
-  recs.push({
-    title: "Crear FAQPage estructurada",
-    description:
-      "Agrega una seccion de preguntas frecuentes con Schema FAQPage. Este formato es altamente compatible con AI Overviews y featured snippets.",
+    title: "Creación de Señales de Autoridad Local",
+    description: "Para superar a los competidores atrincherados en el mapa, necesitamos menciones de tu negocio en prensa local, directorios específicos del sector y blogs de la ciudad.",
     impact: "medium",
-    category: "SEO Tecnico",
+    category: "Off-page SEO",
   })
 
   return recs

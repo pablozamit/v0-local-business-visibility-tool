@@ -78,7 +78,10 @@ function extractAiText(payload: any): string {
 }
 
 function parseMapPack(payload: any, businessName: string) {
-  const local = Array.isArray(payload?.local_results) ? payload.local_results : []
+  // SerpAPI sometimes puts local_results inside a places array or directly at root
+  const local = Array.isArray(payload?.local_results) 
+    ? payload.local_results 
+    : (Array.isArray(payload?.local_results?.places) ? payload.local_results.places : [])
 
   const competitors = local
     .slice(0, 3)
@@ -90,7 +93,7 @@ function parseMapPack(payload: any, businessName: string) {
     return isMatch(businessName, title)
   })
 
-  const position = hit?.position
+  const position = hit?.position || (hit && local.indexOf(hit) + 1)
   const numericPosition = typeof position === "number" ? position : null
 
   return {
@@ -150,17 +153,19 @@ export async function runSerpQuery({
     google_domain: "google.es",
     gl: "es",
     hl: "es",
-    // CRITICAL: SerpAPI's mobile parser frequently drops local_results for standard searches.
-    // Desktop parser is much more reliable at extracting the Map Pack.
     device: "desktop",
     num: "10",
-    location: business.location.toLowerCase().includes("spain") ? business.location : `${business.location}, Spain`,
+    // We must pass the exact standardized Google UULE string or a very specific location.
+    // SerpAPI has trouble with just 'Madrid, Spain' for some accounts. 
+    // Passing just the generic location usually works better if it's a major city.
+    location: business.location,
   })
 
   const url = `https://serpapi.com/search.json?${params.toString()}`
 
   const res = await fetch(url, {
-    next: { revalidate: 60 * 5 },
+    // Avoid caching completely during debug
+    cache: 'no-store'
   })
 
   if (!res.ok) {

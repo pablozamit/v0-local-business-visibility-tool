@@ -1,40 +1,51 @@
-# Instrucciones de Integración para AntGravity / OpenCode
+# Instrucciones para el Agente de IA (AntGravity / OpenCode)
 
-Esta herramienta ha sido expuesta como una API RESTful estándar para que cualquier agente de IA pueda consumir los informes de auditoría local de forma nativa sin interactuar con la interfaz visual.
+Este agente dispone de DOS herramientas que debes usar en orden estricto según la fase del proceso comercial.
 
-## Endpoint de la API
+---
 
-\`\`\`http
-POST https://v0-local-business-visibility-tool.vercel.app/api/analyze
-Content-Type: application/json
-\`\`\`
+## FASE 1: Prospección — `prospectLocalLeads` (`POST /api/prospect`)
 
-## Payload (Body) requerido
+**Cuándo usarla:** Cuando necesites encontrar nuevos leads a los que enviar un Cold Email. Nunca antes de tener el barrio y sector definidos.
 
-El agente debe enviar un JSON con 3 propiedades obligatorias:
+**Qué hace:** Busca en Google Maps dentro de las coordenadas exactas de un barrio de la base de datos. Salta a los 3 ganadores y devuelve los negocios del puesto 4-20 que tienen web pero fallan en lo básico de su ficha local.
 
-\`\`\`json
+**Cómo llamarla:**
+```json
 {
-  "name": "Nombre exacto del negocio (ej. Clínica Ferrus)",
-  "location": "Ciudad o barrio (ej. Madrid)",
-  "category": "Palabra clave principal o sector (ej. dentista)"
+  "neighborhoodId": "mad-salamanca",
+  "category": "dentista"
 }
-\`\`\`
+```
 
-## Cómo configurar la herramienta en tu Agente
+**IDs de barrio disponibles:** mad-salamanca, mad-chamberi, mad-chamartin, mad-azca, mad-retiro, mad-justicia, mad-cortes, mad-moncloa, mad-arturo, mad-fuencarral, mad-valdebebas, mad-pozuelo-centro, mad-pozuelo-zoco, mad-majadahonda, mad-majadahonda-monte, mad-lasrozas, mad-boadilla, mad-alcobendas, mad-ssreyes, mad-trescantos, mad-getafe, mad-leganes, mad-mostoles, mad-alcorcon, mad-fuenlabrada, bcn-eixample-dret, bcn-eixample-esq, bcn-sarria, bcn-sant-gervasi, bcn-pedralbes, bcn-gracia, bcn-les-corts, bcn-poblenou, bcn-vila-olimpica, bcn-gotic, bcn-el-born, bcn-sant-antoni, bcn-sants, bcn-santcugat, bcn-santcugat-volp, bcn-esplugues, bcn-sant-just, bcn-badalona, bcn-hospitalet, bcn-terrassa, val-ruzafa, val-eixample, val-ciutat-vella, val-pla-real, val-arrancapins, val-extramurs, val-campanar, val-ciutat-arts, val-cabanyal, val-benimaclet, sev-nervion, sev-los-remedios, sev-arenal, sev-centro, sev-triana, sev-viapol, sev-bermejales, sev-aljarafe, mal-centro, mal-soho, mal-malagueta, mal-pedregalejo, mal-teatinos, mar-centro, mar-banus, mar-milla, mar-sanpedro, mal-fuengirola, bil-abando, bil-indautxu, bil-ensanche, bil-deusto, bil-getxo, don-centro, don-gros, don-antiguo, zar-centro, zar-actur, zar-romareda, zar-arrabal, zar-casablanca, pal-centro, pal-sta-catalina, pal-paseo, pal-calvia, can-vegueta, can-canteras, can-stacruz, can-adeje, ali-centro, ali-sanjuan, ali-elche, mur-centro, mur-flota, mur-juan
 
-1. **Si usas OpenAPI / Swagger:** Importa directamente el archivo \`openapi.yaml\` que se encuentra en la raíz de este repositorio. El agente entenderá automáticamente los inputs y la estructura de respuesta.
-2. **Si configuras una Herramienta / Action manual:**
-   - **Nombre de la acción:** \`GenerarAuditoriaLocalSEO\`
-   - **Método:** \`POST\`
-   - **URL:** \`https://v0-local-business-visibility-tool.vercel.app/api/analyze\`
-   - **Instrucciones para el modelo:** "Usa esta herramienta cuando el usuario pida auditar la visibilidad en Google, el impacto de la IA o el Map Pack de un negocio local. Proporciona el nombre de la empresa, la ciudad y el sector. Lee la propiedad \`internalReport\` y \`scores\` del JSON resultante para formular un diagnóstico estratégico para el usuario."
+**Qué hacer con la respuesta:**
+Del JSON que recibas, extrae el array `prospects`. Para cada prospecto tienes: nombre, web, teléfono, y `redFlags` (sus errores concretos detectados automáticamente). También tienes `topCompetitors` (los rivales que les ganan en ese barrio). Usa estos datos para redactar un Cold Email personalizado por cada lead siguiendo esta estructura:
 
-## Estructura de Respuesta para el Agente
+1. Menciona el barrio/ciudad y un competidor concreto de `topCompetitors` que les está ganando.
+2. Cita el `redFlag` detectado como motivo de la llamada (ej: "solo X reseñas" o "nombre no optimizado").
+3. Ofrece hacerles una auditoría de visibilidad gratuita (el hook para activar la Fase 2).
 
-El agente recibirá un JSON inmenso. Las propiedades más útiles para la IA son:
+---
 
-- \`scores.visibilityLoss\`: El porcentaje de caída (usar como gancho emocional).
-- \`internalReport.insights\`: Array de strings pre-procesados con diagnósticos de alto nivel (qué falla y qué oportunidades hay).
-- \`internalReport.topCompetitors\`: Quién le está quitando las ventas en el mapa.
-- \`recommendations\`: Pasos exactos que el agente puede proponer al cliente como "Plan de Acción".
+## FASE 2: Auditoría — `generateVisibilityReport` (`POST /api/analyze`)
+
+**Cuándo usarla:** SOLO cuando el lead ha respondido afirmativamente al Cold Email y ha aceptado la auditoría. Nunca antes.
+
+**Qué hace:** Ejecuta 6 búsquedas reales en Google para el negocio y devuelve un informe completo con el impacto de la IA de Google en su visibilidad.
+
+**Cómo llamarla:**
+```json
+{
+  "name": "Clínica Dental Martínez",
+  "location": "Madrid",
+  "category": "dentista"
+}
+```
+
+**Qué hacer con la respuesta:**
+1. Lee `scores.visibilityLoss` para el gancho emocional: "Has perdido X% de visibilidad".
+2. Lee `internalReport.insights` para el diagnóstico: explica en lenguaje humano qué está fallando.
+3. Lee `internalReport.topCompetitors` para nombrar a la competencia que les roba clics.
+4. Proporciona las 2 primeras recomendaciones de `recommendations` con `impact: high` como el Plan de Acción.

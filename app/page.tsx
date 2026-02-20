@@ -4,7 +4,6 @@ import { useState, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { BusinessForm } from "@/components/business-form"
 import { ReportView } from "@/components/report-view"
-import { generateReport } from "@/lib/simulation"
 import { Eye, Search, BarChart3, Lightbulb, Sparkles } from "lucide-react"
 import type { BusinessInput, VisibilityReport } from "@/lib/types"
 
@@ -25,15 +24,34 @@ function FeatureCard({ icon, title, description }: { icon: React.ReactNode; titl
 export default function HomePage() {
   const [report, setReport] = useState<VisibilityReport | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = useCallback((data: BusinessInput) => {
+  const handleSubmit = useCallback(async (data: BusinessInput) => {
     setIsLoading(true)
-    // Simulate a brief analysis delay
-    setTimeout(() => {
-      const result = generateReport(data)
+    setError(null)
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        throw new Error(text || `Request failed (${res.status})`)
+      }
+
+      const result = (await res.json()) as VisibilityReport
       setReport(result)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Error desconocido"
+      setError(message)
+    } finally {
       setIsLoading(false)
-    }, 1500)
+    }
   }, [])
 
   return (
@@ -77,6 +95,11 @@ export default function HomePage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
+                  {error && (
+                    <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                      {error}
+                    </div>
+                  )}
                   <BusinessForm onSubmit={handleSubmit} isLoading={isLoading} />
                 </CardContent>
               </Card>
@@ -99,12 +122,12 @@ export default function HomePage() {
                 <FeatureCard
                   icon={<Search className="h-4 w-4" />}
                   title="6 tipos de consulta"
-                  description="Simulamos busquedas directas, de proximidad, precios, opiniones, horarios y calidad."
+                  description="Analizamos busquedas directas, de proximidad, precios, opiniones, horarios y calidad."
                 />
                 <FeatureCard
                   icon={<BarChart3 className="h-4 w-4" />}
                   title="Analisis comparativo"
-                  description="Compara tu visibilidad en Map Pack vs AI Overview con graficos detallados."
+                  description="Compara tu visibilidad en Map Pack vs AI Overview con datos reales."
                 />
                 <FeatureCard
                   icon={<Sparkles className="h-4 w-4" />}
@@ -120,13 +143,11 @@ export default function HomePage() {
 
               <div className="rounded-xl border border-border/30 bg-secondary/20 p-5">
                 <h3 className="text-sm font-semibold text-foreground mb-2">
-                  El problema que no ves
+                  Nota sobre los datos
                 </h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Muchos negocios locales que antes aparecian en las primeras posiciones de Google
-                  ahora estan siendo desplazados por los AI Overviews, sin que sus propietarios
-                  lo sepan. Esta herramienta simula ese impacto y te da las claves para adaptarte
-                  al nuevo paradigma de busquedas con IA.
+                  Este diagnostico consulta resultados reales de Google via API (configurable por ubicacion y dispositivo).
+                  Como las SERPs son dinamicas, los resultados pueden variar levemente entre ejecuciones.
                 </p>
               </div>
             </div>

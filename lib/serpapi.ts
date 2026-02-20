@@ -143,7 +143,6 @@ export async function runSerpQuery({
   queryText: string
   apiKey: string
 }): Promise<QueryResult> {
-  // Use tbm=lcl to explicitly request local search behavior from Google
   const params = new URLSearchParams({
     engine: "google",
     q: queryText,
@@ -151,22 +150,16 @@ export async function runSerpQuery({
     google_domain: "google.es",
     gl: "es",
     hl: "es",
-    device: "mobile",
+    // CRITICAL: SerpAPI's mobile parser frequently drops local_results for standard searches.
+    // Desktop parser is much more reliable at extracting the Map Pack.
+    device: "desktop",
     num: "10",
-    // This format is highly specific for SerpAPI to trigger the localized SERP with a map pack
     location: business.location.toLowerCase().includes("spain") ? business.location : `${business.location}, Spain`,
   })
-
-  // If the query is direct or proximity, explicitly request a local/maps behavior 
-  // to maximize the chance Google returns the local_results array
-  if (queryType === "directa" || queryType === "proximidad") {
-    params.set("tbm", "lcl")
-  }
 
   const url = `https://serpapi.com/search.json?${params.toString()}`
 
   const res = await fetch(url, {
-    // Shorter cache to avoid sticking to a bad 0-result SERP while testing
     next: { revalidate: 60 * 5 },
   })
 

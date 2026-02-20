@@ -4,9 +4,60 @@ function normalize(text: string) {
   return text
     .toLowerCase()
     .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
+}
+
+// Simple Levenshtein distance for fuzzy matching
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+
+  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null))
+
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j
+
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1,
+        matrix[j - 1][i] + 1,
+        matrix[j - 1][i - 1] + indicator
+      )
+    }
+  }
+  return matrix[b.length][a.length]
+}
+
+function isMatch(businessName: string, textToCheck: string): boolean {
+  if (!textToCheck) return false
+  
+  const nBusiness = normalize(businessName)
+  const nText = normalize(textToCheck)
+
+  // 1. Direct inclusion (best case)
+  if (nText.includes(nBusiness) || nBusiness.includes(nText)) return true
+
+  // 2. Token overlap (e.g. "Clinica Dental Dentix" vs "Dentix Madrid")
+  const businessTokens = nBusiness.split(" ").filter(t => t.length > 2)
+  const textTokens = nText.split(" ").filter(t => t.length > 2)
+
+  if (businessTokens.length > 0 && textTokens.length > 0) {
+    let matches = 0
+    for (const bt of businessTokens) {
+      if (textTokens.some(tt => tt === bt || levenshteinDistance(bt, tt) <= 1)) {
+        matches++
+      }
+    }
+    // If at least 50% of the significant words match, consider it a hit
+    if (matches / businessTokens.length >= 0.5) return true
+  }
+
+  return false
 }
 
 function extractAiText(payload: any): string {
@@ -38,10 +89,9 @@ function parseMapPack(payload: any, businessName: string) {
     .map((r: any) => r?.title)
     .filter((t: any) => typeof t === "string")
 
-  const nBusiness = normalize(businessName)
   const hit = local.find((r: any) => {
     const title = typeof r?.title === "string" ? r.title : ""
-    return normalize(title).includes(nBusiness)
+    return isMatch(businessName, title)
   })
 
   const position = hit?.position
@@ -51,18 +101,17 @@ function parseMapPack(payload: any, businessName: string) {
     present: local.length > 0,
     position: numericPosition !== null && numericPosition >= 1 && numericPosition <= 3 ? numericPosition : null,
     totalResults: local.length > 0 ? Math.min(3, local.length) : 0,
-    competitors: competitors.filter(c => !normalize(c).includes(nBusiness)).slice(0, 3),
+    competitors: competitors.filter(c => !isMatch(businessName, c)).slice(0, 3),
   }
 }
 
 function parseOrganicPosition(payload: any, businessName: string) {
   const organic = Array.isArray(payload?.organic_results) ? payload.organic_results : []
-  const nBusiness = normalize(businessName)
 
   const hit = organic.find((r: any) => {
     const title = typeof r?.title === "string" ? r.title : ""
     const snippet = typeof r?.snippet === "string" ? r.snippet : ""
-    return normalize(title).includes(nBusiness) || normalize(snippet).includes(nBusiness)
+    return isMatch(businessName, title) || isMatch(businessName, snippet)
   })
 
   const position = hit?.position
@@ -77,7 +126,7 @@ function parseAiOverview(payload: any, businessName: string) {
     return { present: false, mentioned: false, mentionType: "absent" as const, position: null }
   }
 
-  const mentioned = normalize(aiText).includes(normalize(businessName))
+  const mentioned = isMatch(businessName, aiText)
 
   return {
     present: true,
@@ -107,14 +156,12 @@ export async function runSerpQuery({
     hl: "es",
     device: "mobile",
     num: "10",
-    // SerpAPI location expects a specific format; we pass through the user input + Spain as a best-effort.
     location: business.location.toLowerCase().includes("spain") ? business.location : `${business.location}, Spain`,
   })
 
   const url = `https://serpapi.com/search.json?${params.toString()}`
 
   const res = await fetch(url, {
-    // Best-effort caching to avoid burning free-tier credits on repeated tests
     next: { revalidate: 60 * 60 },
   })
 
